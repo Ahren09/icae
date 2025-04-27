@@ -1,7 +1,7 @@
 import json
 import torch
 from tqdm import tqdm
-from transformers import HfArgumentParser, AutoModelForCausalLM
+from transformers import AutoTokenizer, HfArgumentParser, AutoModelForCausalLM
 from peft import LoraConfig
 from modeling_icae_multi_span import ICAE, ModelArguments, DataArguments, TrainingArguments
 import sys
@@ -30,11 +30,11 @@ model = ICAE(model_args, training_args, lora_config)
 print(f"Loading trained checkpoint from {training_args.output_dir}")
 state_dict = load_file(training_args.output_dir)
 model.load_state_dict(state_dict, strict=False) # only load lora and memory token embeddings
-
+tokenizer = AutoTokenizer.from_pretrained(model_args.model_name_or_path)
 model = model.to(device)
 
 # Read the data file
-file_path = "./dev_v2.jsonl"
+file_path = "code/icae_v2/dev_v2.jsonl"
 lines = None
 with open(file_path, "r") as f:
     lines = f.readlines()
@@ -57,8 +57,8 @@ with torch.no_grad():
             
             # decoder input has 3 parts: prefix, memory slots and suffix
             # the following code is for Mistral tokenizer for example: 733, 16289, 28793 are for the Mistral instruction tempmlate
-            prompt_left_ids =  torch.LongTensor([[1, 733, 16289, 28793]]).to(device)
-            prompt_right_ids = [model.ft_token_id] + tokenized_prompt['input_ids'] + [733, 28748, 16289, 28793]
+            prompt_left_ids =  torch.LongTensor([[1, 733, 16289, 28793]]).to(device)  # ['<s>', '▁[', 'INST', ']']
+            prompt_right_ids = [model.ft_token_id] + tokenized_prompt['input_ids'] + [733, 28748, 16289, 28793] # ['▁[', '/', 'INST', ']']
             prompt_right_ids = torch.LongTensor([prompt_right_ids]).to(device)
 
             prompt_left_embs = model.tokens_to_embeddings(prompt_left_ids)

@@ -15,7 +15,6 @@ from torch.nn.functional import gelu
 import math
 from safetensors.torch import load_file
 
-device = torch.device("cuda" if torch.cuda.is_available() else "cpu")
 
 @dataclass
 class ModelArguments:
@@ -96,15 +95,18 @@ def freeze_model(model):
 class ICAE(torch.nn.Module):
     def __init__(self, model_args, training_args, lora_config):
         super().__init__()
+        
+        device = torch.device("cuda" if torch.cuda.is_available() else "cpu")
+
         self.model_args = model_args
         self.training_args = training_args
         self.model_name = model_args.model_name_or_path
         self.icae = AutoModelForCausalLM.from_pretrained(self.model_name, torch_dtype=torch.float16 if training_args.bf16 is False else torch.bfloat16, use_flash_attention_2=True, resume_download=True)
-        
+        self.icae.to(device)
         self.training = self.model_args.train    
         
         if self.training:    # indepedent model for gradient checkpointing
-            self.decoder = AutoModelForCausalLM.from_pretrained(self.model_name, torch_dtype=torch.float16 if training_args.bf16 is False else torch.bfloat16, use_flash_attention_2=True, resume_download=True)
+            self.decoder = AutoModelForCausalLM.from_pretrained(self.model_name, torch_dtype=torch.float16 if training_args.bf16 is False else torch.bfloat16, use_flash_attention_2=True, resume_download=True).to(device)
 
         self.vocab_size = self.icae.config.vocab_size + 1    # [PAD] token
         self.pad_token_id = self.vocab_size - 1
@@ -174,17 +176,20 @@ class ICAE(torch.nn.Module):
         
         prompt_answer_embs = self.icae.get_base_model().model.embed_tokens(prompt_answer_ids)
         max_compressed_length = num_segments * self.mem_size
-        compress_outputs = torch.zeros((max_compressed_length, self.dim)).to(prompt_answer_embs)
+        
+        # This might be a bug. No batch sizes?
+        # compress_outputs = torch.zeros((max_compressed_length, self.dim)).to(prompt_answer_embs)
+        compress_outputs = torch.zeros((batch_size, max_compressed_length, self.dim)).to(prompt_answer_embs)
         
         for segment_idx in range(num_segments):
             
             start_idx = segment_idx * segment_length
             end_idx = min((segment_idx + 1) * segment_length, total_length)
-            segment_input_ids = input_ids[:, start_idx:end_idx]
-            segment_input_ids = torch.cat([segment_input_ids, self.append_sequence], dim=1)
+            segment_input_ids = input_ids[:, start_idx:end_idx] # (B, 606)
+            segment_input_ids = torch.cat([segment_input_ids, self.append_sequence.repeat(segment_input_ids.shape[0], 1)], dim=1) # torch.Size([8, 431])
             mem_flag = segment_input_ids >= self.vocab_size
-
-            segment_input_embedding = self.icae.get_base_model().model.embed_tokens(segment_input_ids)
+            # Each sequence has 128 locations with mem_flag == True. So mem_flag.sum() is 1024
+            segment_input_embedding = self.icae.get_base_model().model.embed_tokens(segment_input_ids)  # (8, 431, 4096)
             segment_input_embedding[mem_flag] = self.memory_token_embed(segment_input_ids[mem_flag] - self.vocab_size).to(segment_input_embedding)
 
             # compress the current segment
@@ -193,6 +198,7 @@ class ICAE(torch.nn.Module):
 
             # collect memory tokens
             compress_outputs[segment_idx*self.mem_size: self.mem_size*(segment_idx+1)] = segment_compress_outputs[mem_flag]
+            compress_outputs[:, segment_idx*self.mem_size: self.mem_size*(segment_idx+1)] = segment_compress_outputs[mem_flag].reshape(batch_size, -1, self.dim)
             
             del segment_input_ids, segment_input_embedding
             torch.cuda.empty_cache()
@@ -204,7 +210,7 @@ class ICAE(torch.nn.Module):
         special_prompt = prompt_answer_ids >= self.vocab_size_with_mem
         prompt_answer_embs[special_prompt] = self.memory_token_embed(prompt_answer_ids[special_prompt] - self.vocab_size).to(prompt_answer_embs)    # replace special token's embedding from self.memory_token_embed
         
-        if self.training:   # has an independent se.f.decoder
+        if self.training:   # has an independent self.decoder
             decoder_outputs = self.decoder(inputs_embeds=prompt_answer_embs, output_hidden_states=True)
         else:
             with self.icae.disable_adapter():   # no independent decoder; use self.icae
@@ -250,7 +256,7 @@ class ICAE(torch.nn.Module):
 
             # compress the current segment
             segment_compress_outputs = self.icae(inputs_embeds=segment_input_embedding, output_hidden_states=True)
-            segment_compress_outputs = segment_compress_outputs.hidden_states[-1]
+            segment_compress_outputs = segment_compress_outputs.hidden_states[-1]  # (1, 208, 4096)
 
             # collect memory tokens
             compress_outputs[segment_idx*self.mem_size: self.mem_size*(segment_idx+1)] = segment_compress_outputs[mem_flag]

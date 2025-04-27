@@ -51,11 +51,11 @@ with torch.no_grad():
             
             # prompt_output = model.tokenizer(data['prompt'], add_special_tokens=False, padding=False)
             prompt_ids = torch.LongTensor([[model.ae_token_id]]).to(device)
-
+            # [1, 1, 4096]
             prompt_answer_embs = model.tokens_to_embeddings(prompt_ids)
             memory_slots = memory_slots.to(prompt_answer_embs)
                         
-            # Concatenate and clone input embeddings
+            # Concatenate and clone input embeddings. decoder_input_embeddings: [1, 129, 4096]
             decoder_input_embeddings = torch.cat((memory_slots.unsqueeze(0), prompt_answer_embs), dim=1)
             output = decoder_input_embeddings.clone()
 
@@ -65,7 +65,13 @@ with torch.no_grad():
             # Generate text output
             for i in range(512):
                 with model.icae.disable_adapter():   # no independent decoder; use self.icae
+                    
+                    
                     out = model.icae(inputs_embeds=output, past_key_values=past_key_values, use_cache=True)
+
+
+
+                # out.logits.shape is 1, 1, vocab_size (32132)
                 logit = out.logits[:, -1, :model.vocab_size-1]
                 past_key_values = out.past_key_values
 

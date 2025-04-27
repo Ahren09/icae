@@ -82,7 +82,9 @@ def text_extraction(input_ids, length, lm_ratio=0.0):
 
 
 def pretrain_tokenize_function(examples, model, mem, lm_ratio=0.0):
-    text_output = model.tokenizer(examples["text"], truncation=False, padding=False, return_attention_mask=False)
+    # text_output = model.tokenizer(examples["text"], truncation=False, padding=False, return_attention_mask=False)
+    # Ahren
+    text_output = model.tokenizer(examples["input"], truncation=False, padding=False, return_attention_mask=False)
     text_output['prompt_answer_ids'] = []
     text_output['labels'] = []
 
@@ -171,5 +173,5 @@ class DataCollatorForDynamicPadding:
             max_length = ((max_length - 1) // self.pad_to_multiple_of + 1) * self.pad_to_multiple_of
         padded_sequences = torch.full((len(sequences), max_length), fill_value, dtype=torch.long)
         for i, seq in enumerate(sequences):
-            padded_sequences[i, :len(seq)] = seq
+            padded_sequences[i, :len(seq)] = seq  # Left-padded
         return padded_sequences

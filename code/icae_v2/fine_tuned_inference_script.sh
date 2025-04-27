@@ -1,5 +1,5 @@
 #!/bin/bash
-
+set -x
 # MODEL="mistralai/Mistral-7B-v0.1"
 BASE_MODEL="mistralai/Mistral-7B-Instruct-v0.2"
 # MODEL="meta-llama/Llama-2-7b-hf"
